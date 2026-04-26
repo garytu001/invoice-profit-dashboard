@@ -88,8 +88,28 @@ with tab_review:
         
         if c2.button("解析預覽", use_container_width=True) and uploaded_file:
             with st.spinner("GPT 解析中..."):
-                content = uploaded_file.read()
-                mime_type = resolve_mime_type(uploaded_file, content)
+                if c2.button("解析預覽", use_container_width=True) and uploaded_file:
+                    with st.spinner("GPT 解析中..."):
+                        content = uploaded_file.read()
+                        
+                        # --- 修正處：封裝一個相容的小物件 ---
+                        class CompatibilityFile:
+                            def __init__(self, st_file):
+                                self.content_type = st_file.type
+                        
+                        compat_file = CompatibilityFile(uploaded_file)
+                        # 傳入這個 compat_file，這樣你 main.py 裡的 file.content_type 就不會報錯了
+                        mime_type = resolve_mime_type(compat_file, content)
+                        # ----------------------------------
+                        
+                        try:
+                            # 直接呼叫你 main.py 裡的函數
+                            data = parse_invoice_with_gpt(content, mime_type=mime_type)
+                            st.session_state['current_parsed'] = data
+                            st.session_state['source_name'] = uploaded_file.name
+                            st.success(f"解析完成：共 {len(data.get('items', []))} 筆明細")
+                        except Exception as e:
+                            st.error(f"解析失敗：{e}")
                 data = parse_invoice_with_gpt(content, mime_type=mime_type)
                 st.session_state['current_parsed'] = data
                 st.session_state['source_name'] = uploaded_file.name
