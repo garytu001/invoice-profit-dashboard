@@ -88,4 +88,118 @@ with tab1:
 
         st.subheader("明細資料 (可直接在表格內修改)")
         if p_data.get('items'):
-            # 使用
+            # 使用 Streamlit 超強的資料編輯器 (取代你原本寫的 <table> 和 <input>)
+            df = pd.DataFrame(p_data['items'])
+            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+            # 將修改後的資料存回 session
+            st.session_state['parsed_data']['items'] = edited_df.to_dict('records')
+
+# ==========================================
+# 頁籤 2：成本表管理
+# ==========================================
+with tab2:
+    st.subheader("新增成本")
+    with st.form("add_cost_form", clear_on_submit=True):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        product = c1.text_input("品名 (必填)")
+        grade = c2.text_input("等級")
+        spec = c3.text_input("規格")
+        cost_per_unit = c4.number_input("成本單價", min_value=0.0, step=0.1)
+        cost_unit = c5.selectbox("單位", ["才", "坪"])
+        
+        if st.form_submit_button("新增成本"):
+            if product:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO cost_table (product, grade, spec, cost_per_unit, cost_unit) VALUES (?, ?, ?, ?, ?)",
+                    (product, grade or None, spec or None, cost_per_unit, cost_unit)
+                )
+                conn.commit()
+                conn.close()
+                st.success("新增成功！")
+            else:
+                st.error("品名為必填！")
+
+    st.subheader("現有成本表")
+    conn = get_conn()
+    df_costs = pd.read_sql_query("SELECT id, product, grade, spec, cost_per_unit, cost_unit, effective_from FROM cost_table", conn)
+    conn.close()
+    st.dataframe(df_costs, use_container_width=True)
+
+# ==========================================
+# 頁籤 3：報表儀表板
+# ==========================================
+with tab3:
+    col1, col2 = st.columns([2, 8])
+    period = col1.selectbox("統計區間", ["month", "quarter", "year"], format_func=lambda x: {"month":"月", "quarter":"季", "year":"年"}[x])
+    
+    if col2.button("載入報表"):
+        with st.spinner("計算利潤中..."):
+            dash_data = get_dashboard(period=period)
+            
+            # 1. 摘要卡片 (取代 HTML 的 .cards)
+            st.markdown("### 彙總資訊")
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            summary = dash_data['summary']
+            sc1.metric("營收", f"${summary['revenue_total']:,.2f}")
+            sc2.metric("銷貨成本", f"${summary['cogs_total']:,.2f}")
+            sc3.metric("毛利", f"${summary['gross_profit_total']:,.2f}")
+            margin = summary['gross_margin_rate']
+            sc4.metric("毛利率", f"{margin*100:.2f}%" if margin else "--")
+
+            st.markdown("---")
+            
+            # 2. 客戶與品項表格 (左右兩欄)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**客戶毛利排行**")
+                st.dataframe(pd.DataFrame(dash_data['by_customer']), use_container_width=True)
+            with c2:
+                st.markdown("**品項毛利排行**")
+                st.dataframe(pd.DataFrame(dash_data['by_item']), use_container_width=True)
+
+            st.markdown("---")
+
+            # 3. 圖表區 (取代 HTML 的 SVG 繪圖)
+            st.markdown("### 圖表分析")
+            chart_col1, chart_col2, chart_col3 = st.columns(3)
+            
+            # 將資料轉為 DataFrame 以利繪圖
+            df_cust = pd.DataFrame(dash_data['by_customer'])
+            df_trend = pd.DataFrame(dash_data['trend'])
+
+            with chart_col1:
+                st.markdown("**客戶營收占比**")
+                if not df_cust.empty:
+                    # Streamlit 無法直接畫圓餅圖，我們用 Altair 或 Bar chart 替代展示比例
+                    st.bar_chart(df_cust.set_index('customer_name')['revenue'])
+            
+            with chart_col2:
+                st.markdown("**客戶毛利排行**")
+                if not df_cust.empty:
+                    st.bar_chart(df_cust.set_index('customer_name')['gross_profit'])
+
+            with chart_col3:
+                st.markdown("**營收/毛利趨勢**")
+                if not df_trend.empty:
+                    st.line_chart(df_trend.set_index('bucket')[['revenue', 'gross_profit']])
+
+# ==========================================
+# 頁籤 4：匯出
+# ==========================================
+with tab4:
+    st.markdown("### 資料匯出")
+    st.info("匯出功能即將從資料庫提取最新資料。")
+    
+    conn = get_conn()
+    df_items = pd.read_sql_query("SELECT * FROM invoice_items", conn)
+    conn.close()
+
+    csv = df_items.to_csv(index=False).encode('utf-8-sig')
+    st.download_button(
+        label="下載明細 CSV",
+        data=csv,
+        file_name='invoice_items.csv',
+        mime='text/csv',
+    )
