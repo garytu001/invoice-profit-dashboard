@@ -1,0 +1,12 @@
+# 環境變數與機密資訊
+.env
+
+# 資料庫檔案 (避免覆蓋或外洩)
+*.db
+*.sqlite3
+
+# Python 產生的快取檔
+__pycache__/
+*.pyc
+.venv/
+venv/
