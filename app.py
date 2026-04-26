@@ -1,43 +1,91 @@
+import os
 import streamlit as st
-import streamlit.components.v1 as components
-from pathlib import Path
+import pandas as pd
+import sqlite3
 
-# 設定為寬螢幕模式，給你的儀表板最大的顯示空間
-st.set_page_config(page_title="請款單影像解析與毛利網站", layout="wide")
+# 1. 讀取 Streamlit Secrets 的金鑰，並設定為環境變數
+# 這樣你原本 main.py 裡面的 client = OpenAI() 就能自動抓到金鑰，完全不用改 main.py！
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
 
-# 隱藏 Streamlit 預設的頂部空白與選單，讓畫面看起來就像純粹的網頁
+# 2. 匯入你原本寫好的強大核心邏輯 (完全不改動你的原有功能)
+# 確保你的 main.py, db.py 等檔案都在同一個資料夾
+from main import (
+    parse_invoice_with_gpt, 
+    save_invoice_to_db, 
+    get_dashboard,
+    resolve_mime_type
+)
+from db import get_conn, init_db
+
+# 初始化資料庫
+init_db()
+
+# 3. 頁面風格設定 (保留你原有的深藍/專業風格)
+st.set_page_config(page_title="Invoice GP Dashboard", layout="wide")
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    .block-container {padding-top: 1rem; padding-bottom: 0;}
+    .stButton>button { background-color: #0f766e; color: white; font-weight: bold; }
+    .stButton>button:hover { background-color: #0d645d; color: white; }
     </style>
 """, unsafe_allow_html=True)
 
-# 1. 提供一個輸入框，讓你可以隨時填入「真正大腦 (FastAPI)」的網址
-st.markdown("### ⚙️ 系統連線設定")
-api_url = st.text_input(
-    "FastAPI 後端網址 (若在本地測試請維持預設；若已部署至 Render，請填入 Render 網址)", 
-    value="http://127.0.0.1:8000"
-)
-st.markdown("---")
+st.title("億立可有限公司請款單影像解析與毛利網站")
+st.caption("Upload / Review / Cost / Dashboard / Export")
 
-# 2. 讀取你寫好的原始 HTML 檔案
-html_path = Path(__file__).parent / "webapp.html"
+# 使用 Streamlit 原生的頁籤功能，完全對應你的 HTML tabs
+tab1, tab2, tab3, tab4 = st.tabs(["上傳與人工補正", "成本表管理", "報表儀表板", "匯出"])
 
-if html_path.exists():
-    html_content = html_path.read_text(encoding="utf-8")
+# ==========================================
+# 頁籤 1：上傳與人工補正
+# ==========================================
+with tab1:
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        uploaded_file = st.file_uploader("選擇請款單影像", type=['jpg','png','gif','webp'])
     
-    # 3. 關鍵魔法：動態替換 JS 裡的 API_BASE 變數
-    # 尋找你在 HTML 第 279 行寫的那段程式碼，把它換成畫面上輸入的 API 網址
-    original_js = 'const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:8000" : "";'
-    injected_js = f'const API_BASE = "{api_url.rstrip("/")}";'
-    
-    # 進行替換 (這只會在記憶體中替換，不會去改動你的 GitHub 原始檔)
-    html_content = html_content.replace(original_js, injected_js)
-    
-    # 4. 把你的 HTML 完整渲染出來 (設定高度為 1200px 確保圖表跟表格顯示完整)
-    components.html(html_content, height=1200, scrolling=True)
-else:
-    st.error("找不到 `webapp.html` 檔案，請確認它與 `app.py` 放在同一個資料夾，並已上傳至 GitHub。")
+    # 預覽與入庫按鈕
+    btn_col1, btn_col2 = st.columns([1, 8])
+    if btn_col1.button("解析預覽", use_container_width=True):
+        if uploaded_file is not None:
+            with st.spinner("GPT 解析中..."):
+                content = uploaded_file.read()
+                mime_type = resolve_mime_type(uploaded_file, content)
+                try:
+                    # 直接呼叫你 main.py 裡的函數
+                    parsed = parse_invoice_with_gpt(content, mime_type=mime_type)
+                    st.session_state['parsed_data'] = parsed
+                    st.session_state['source_filename'] = uploaded_file.name
+                    st.success(f"解析完成：共 {len(parsed.get('items', []))} 筆明細")
+                except Exception as e:
+                    st.error(f"解析失敗：{e}")
+        else:
+            st.warning("請先上傳檔案")
+
+    if btn_col2.button("確認入庫", type="secondary"):
+        if 'parsed_data' in st.session_state:
+            with st.spinner("資料入庫中..."):
+                invoice_id = save_invoice_to_db(
+                    st.session_state['parsed_data'], 
+                    st.session_state.get('source_filename', 'manual')
+                )
+                st.success(f"入庫成功！Invoice ID: {invoice_id}")
+                # 入庫後清空暫存
+                del st.session_state['parsed_data']
+        else:
+            st.warning("請先進行解析預覽，確認資料後再入庫")
+
+    # 顯示編輯區 (取代 HTML 的 input 欄位與 Table)
+    if 'parsed_data' in st.session_state:
+        st.subheader("單頭資訊")
+        p_data = st.session_state['parsed_data']
+        
+        c1, c2, c3, c4 = st.columns(4)
+        p_data['print_date'] = c1.text_input("印表日期", p_data.get('print_date', ''))
+        p_data['period_start'] = c2.text_input("請款起", p_data.get('period_start', ''))
+        p_data['period_end'] = c3.text_input("請款迄", p_data.get('period_end', ''))
+        p_data['customer_name'] = c4.text_input("客戶名稱", p_data.get('customer_name', ''))
+
+        st.subheader("明細資料 (可直接在表格內修改)")
+        if p_data.get('items'):
+            # 使用
