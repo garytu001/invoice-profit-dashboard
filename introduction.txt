@@ -1,0 +1,57 @@
+當前後端結構
+backend 目前已拆成這些模組：
+
+main.py (288 行)
+
+FastAPI 應用、路由註冊、入口點
+只保留少量業務邏輯，主要轉發到其他模組
+models.py (34 行)
+
+Pydantic 請求/payload schema
+db.py (116 行)
+
+SQLite 連線與資料庫初始化
+invoice_service.py (251 行)
+
+發票入庫、成本 CRUD、CSV 匯入、項目成本覆寫
+原本在 main.py 的資料相關 DB 邏輯已移到這裡
+reports.py (193 行)
+
+儀表板報表計算與資料彙整
+包含交易年月推斷與報表摘要生成
+profit_calculator.py (227 行)
+
+利潤計算相關演算法
+與成本搜尋、毛利計算有關
+exports.py (99 行)
+
+CSV 匯出功能
+對應 /api/export/... 端點
+utils.py (265 行)
+
+文字解析、token 判斷、原始行拆解
+包含日期推斷等工具函數
+image_utils.py (133 行)
+
+圖片 MIME 驗證與 GPT 解析整合
+invoice_parser.py (260 行)
+
+GPT 解析後的 invoice 結構化處理
+去重、單價標準化、警示標示、統計彙整
+__init__.py (0 行)
+
+空檔案，用於模組初始化
+行數統計
+__init__.py: 0
+db.py: 116
+exports.py: 99
+image_utils.py: 133
+invoice_parser.py: 260
+invoice_service.py: 251
+main.py: 288
+models.py: 34
+profit_calculator.py: 227
+reports.py: 193
+utils.py: 265
+總計
+backend Python 檔案總行數：1866 行
