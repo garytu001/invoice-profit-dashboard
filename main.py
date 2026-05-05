@@ -22,7 +22,7 @@ from .invoice_parser import (
     summarize_warnings,
 )
 from .models import ConfirmPayload, CostOverridePayload, ProfitCalcPayload, CostRowPayload, ItemCostOverridePayload
-from . import invoice_service as svc
+from .invoice_service import invoice_service as svc
 from .reports import get_dashboard_data
 from .exports import export_items_csv as export_items_csv_func, export_summary_csv as export_summary_csv_func
 
