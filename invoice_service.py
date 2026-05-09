@@ -1,8 +1,8 @@
 import csv
 import io
 from fastapi import HTTPException
-from .db import get_conn
-from .models import CostRowPayload, ItemCostOverridePayload
+from db import get_conn
+from models import CostRowPayload, ItemCostOverridePayload
 
 
 def save_invoice_to_db(parsed: dict, source_filename: str) -> int:
