@@ -5,15 +5,16 @@ import io
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import List
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from .db import init_db, get_conn
-from .profit_calculator import calculate_profit_for_invoice, find_cost_for_item
-from .image_utils import ensure_supported_image_mime, extract_raw_lines_with_gpt, resolve_mime_type
-from .utils import parse_raw_line, looks_like_spec
-from .invoice_parser import (
+from db import init_db, get_conn
+from profit_calculator import calculate_profit_for_invoice, find_cost_for_item
+from image_utils import ensure_supported_image_mime, extract_raw_lines_with_gpt, resolve_mime_type
+from utils import parse_raw_line, looks_like_spec
+from invoice_parser import (
     parse_invoice_with_gpt,
     deduplicate_items,
     normalize_unit_price,
@@ -21,10 +22,10 @@ from .invoice_parser import (
     apply_unit_consistency_warnings,
     summarize_warnings,
 )
-from .models import ConfirmPayload, CostOverridePayload, ProfitCalcPayload, CostRowPayload, ItemCostOverridePayload
-from .invoice_service import invoice_service as svc
-from .reports import get_dashboard_data
-from .exports import export_items_csv as export_items_csv_func, export_summary_csv as export_summary_csv_func
+from models import ConfirmPayload, CostOverridePayload, ProfitCalcPayload, CostRowPayload, ItemCostOverridePayload
+import invoice_service as svc
+from reports import get_dashboard_data
+from exports import export_items_csv as export_items_csv_func, export_summary_csv as export_summary_csv_func
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,7 +72,7 @@ def app_page():
 
 
 @app.post("/api/upload")
-async def upload_invoice(file: UploadFile = File(...)):
+async def upload_invoice(files: List[UploadFile] = File(...)):
     """
     上傳請款單影像並完成整條流程：
     1) 讀檔
@@ -80,53 +81,64 @@ async def upload_invoice(file: UploadFile = File(...)):
     4) 存入 DB
     5) 回傳解析結果與統計
     """
-    # 1) 讀取圖片 bytes
-    content = await file.read()
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
-    mime_type = resolve_mime_type(file, content)
-    ensure_supported_image_mime(mime_type)
+    results = []
+    for file in files:
+        try:
+            # 1) 讀取圖片 bytes
+            content = await file.read()
+            if len(content) == 0:
+                results.append({"filename": file.filename, "success": False, "error": "Empty file"})
+                continue
+            mime_type = resolve_mime_type(file, content)
+            ensure_supported_image_mime(mime_type)
 
-    # 2) 呼叫 GPT API 解析
-    try:
-        parsed = parse_invoice_with_gpt(content, mime_type=mime_type)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"GPT parse failed: {e}")
+            # 2) 呼叫 GPT API 解析
+            parsed = parse_invoice_with_gpt(content, mime_type=mime_type)
 
-    # 3) 存到 DB
-    invoice_id = svc.save_invoice_to_db(parsed, source_filename=file.filename)
+            # 3) 存到 DB
+            invoice_id = svc.save_invoice_to_db(parsed, source_filename=file.filename)
 
-    return {
-        "invoice_id": invoice_id,
-        "parsed": parsed,
-        "raw_lines_count": len(parsed.get("raw_lines", [])),
-        "item_count": len(parsed.get("items", [])),
-        "warning_summary": parsed.get("warning_summary", {}),
-    }
+            results.append({
+                "filename": file.filename,
+                "success": True,
+                "invoice_id": invoice_id,
+                "parsed": parsed,
+                "raw_lines_count": len(parsed.get("raw_lines", [])),
+                "item_count": len(parsed.get("items", [])),
+                "warning_summary": parsed.get("warning_summary", {}),
+            })
+        except Exception as e:
+            results.append({"filename": file.filename, "success": False, "error": str(e)})
+    return {"results": results}
 
 
 @app.post("/api/parse-preview")
-async def parse_preview(file: UploadFile = File(...)):
+async def parse_preview(files: List[UploadFile] = File(...)):
     """
     只解析不入庫，供 UI 先做人工作業確認。
     """
-    content = await file.read()
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
-    mime_type = resolve_mime_type(file, content)
-    ensure_supported_image_mime(mime_type)
+    results = []
+    for file in files:
+        try:
+            content = await file.read()
+            if len(content) == 0:
+                results.append({"filename": file.filename, "success": False, "error": "Empty file"})
+                continue
+            mime_type = resolve_mime_type(file, content)
+            ensure_supported_image_mime(mime_type)
 
-    try:
-        parsed = parse_invoice_with_gpt(content, mime_type=mime_type)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"GPT parse failed: {e}")
-
-    return {
-        "parsed": parsed,
-        "raw_lines_count": len(parsed.get("raw_lines", [])),
-        "item_count": len(parsed.get("items", [])),
-        "warning_summary": parsed.get("warning_summary", {}),
-    }
+            parsed = parse_invoice_with_gpt(content, mime_type=mime_type)
+            results.append({
+                "filename": file.filename,
+                "success": True,
+                "parsed": parsed,
+                "raw_lines_count": len(parsed.get("raw_lines", [])),
+                "item_count": len(parsed.get("items", [])),
+                "warning_summary": parsed.get("warning_summary", {}),
+            })
+        except Exception as e:
+            results.append({"filename": file.filename, "success": False, "error": str(e)})
+    return {"results": results}
 
 
 @app.post("/api/confirm")
