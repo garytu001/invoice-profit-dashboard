@@ -1,8 +1,8 @@
 import csv
 import io
 from fastapi.responses import StreamingResponse
-from .db import get_conn
-from .reports import get_dashboard_data
+from db import get_conn
+from reports import get_dashboard_data
 
 
 def export_items_csv(invoice_id: int | None = None):
