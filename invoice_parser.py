@@ -3,8 +3,8 @@ Invoice parsing logic for the GP Dashboard.
 Contains functions for converting raw OCR lines to structured invoice items.
 """
 
-from .utils import parse_raw_line, looks_like_spec
-from .image_utils import extract_raw_lines_with_gpt
+from utils import parse_raw_line, looks_like_spec
+from image_utils import extract_raw_lines_with_gpt
 
 
 def convert_raw_lines_to_items(raw_lines: list[str]) -> list[dict]:
