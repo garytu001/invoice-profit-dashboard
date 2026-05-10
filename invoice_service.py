@@ -4,6 +4,29 @@ from fastapi import HTTPException
 from db import get_conn
 from models import CostRowPayload, ItemCostOverridePayload
 
+def infer_item_year(date_str: str, period_end_str: str, period_start_str: str = None) -> str:
+    try:
+        # 解析 period_end
+        parts = period_end_str.replace("-", "/").split("/")
+        y = int(parts[0])
+        base_year = y + 1911 if y < 1911 else y
+        end_m = int(parts[1])
+
+        # 解析明細日期
+        m_parts = date_str.replace("-", "/").split("/")
+        if len(m_parts) < 2:
+            return date_str
+        m, d = int(m_parts[0]), int(m_parts[1])
+
+        # 核心邏輯：明細月份 > period_end 月份，代表是前一年的帳
+        if m > end_m:
+            target_year = base_year - 1
+        else:
+            target_year = base_year
+
+        return f"{target_year}-{m:02d}-{d:02d}"
+    except:
+        return date_str
 
 def save_invoice_to_db(parsed: dict, source_filename: str) -> int:
     """
@@ -13,6 +36,23 @@ def save_invoice_to_db(parsed: dict, source_filename: str) -> int:
     """
     conn = get_conn()
     cur = conn.cursor()
+    
+    # 防止重複入庫：檢查同檔名是否已存在
+    cur.execute(
+        "SELECT id FROM invoices WHERE source_filename = ? LIMIT 1",
+        (source_filename,)
+    )
+    existing = cur.fetchone()
+    if existing:
+        conn.close()
+        raise Exception(
+            f"此檔案已入庫過（invoice_id={existing['id']}），"
+            f"請勿重複上傳。若要重新上傳，請先刪除舊資料。"
+        )
+    
+    # 取出單頭的 period_end
+    p_end = parsed.get("period_end")
+    p_start = parsed.get("period_start")
 
     # 先寫單頭
     cur.execute(
@@ -33,12 +73,17 @@ def save_invoice_to_db(parsed: dict, source_filename: str) -> int:
     # 再寫明細
     items = parsed.get("items", [])
     for it in items:
+        # 調用剛寫好的工具
+        full_year = infer_item_year(it.get("date"), p_end, p_start)
+        year_int = int(full_year.split("-")[0]) if "-" in full_year else None
+        
         cur.execute(
             """
             INSERT INTO invoice_items
             (
                 invoice_id,
                 item_date,
+                item_year,
                 order_no,
                 line_type,
                 product,
@@ -50,11 +95,12 @@ def save_invoice_to_db(parsed: dict, source_filename: str) -> int:
                 unit_price,
                 amount
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 invoice_id,
-                it.get("date"),
+                full_year, # 存入推測出的西元年
+                year_int,        # item_year ← 這行是新加的！
                 it.get("order_no"),
                 it.get("line_type", "sale"),
                 it.get("product"),
@@ -249,3 +295,4 @@ def delete_item_cost_override(invoice_item_id: int) -> dict:
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"override for invoice_item_id={invoice_item_id} not found")
     return {"ok": True}
+
