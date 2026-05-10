@@ -82,11 +82,12 @@ You must return valid JSON only.
 
 任務分成兩部分：
 
-第一部分：讀取抬頭區域，找出：
+第一部分：讀取抬頭區域，請務必精確抓取：
 1. print_date（印表日期）
-2. period_start（請款期間起）
-3. period_end（請款期間迄）
+2. period_start（請款期間起）（例如 115/01/01）
+3. period_end（請款期間迄）（例如 115/01/31）
 4. customer_name（客戶名稱，不是開立請款單的公司名稱）
+以上欄位對於後續年份計算至關重要。
 
 第二部分：逐行轉錄明細表。
 請把每一筆明細原樣轉錄到 raw_lines。
@@ -99,7 +100,9 @@ You must return valid JSON only.
 5. 不要自行理解欄位意義，不要重組欄位，只要忠實轉錄。
 6. 若某列看起來跨行，請盡量合併成同一列。
 7. 請確保 raw_lines 包含所有可見明細列，不要只擷取部分。
-8. 如果表格有多列，請完整輸出全部，不要截斷。"""
+8. 如果表格有多列，請完整輸出全部，不要截斷。
+9. 若某列看起來像是「合計」、「小計」、「總條」、「總計」開頭，請不要輸出該列。
+10. raw_lines 的每一行，第一個欄位一定是日期（mm/dd格式），第二個欄位一定是單號（5-7位數字），若不符合請勿輸出。"""
 
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -131,3 +134,4 @@ You must return valid JSON only.
         data["raw_lines"] = []
 
     return data
+
