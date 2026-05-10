@@ -256,10 +256,44 @@ def infer_txn_ym(item_date: str | None, period_end: str | None, created_at: str 
         # 請款期間跨年時，月份大於 period_end 月份通常屬於前一年
         yy = end_y - 1 if mm > end_m else end_y
         return yy, mm
-
+    
+    # 如果 item_date 已經是完整的 YYYY-MM-DD 格式，直接解析不需要推算
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(item_date or "")):
+        parts = item_date.split("-")
+        return int(parts[0]), int(parts[1])
+    
     # fallback: created_at(YYYY-MM-DD ...)
     created = str(created_at or "")
     m = re.fullmatch(r"\s*(\d{4})-(\d{2})-\d{2}.*", created)
     if m:
         return int(m.group(1)), int(m.group(2))
     return None
+
+
+def infer_item_year(item_date_md: str, period_end_roc: str) -> int:
+    """
+    輸入: item_date_md="01/02", period_end_roc="115/01/31"
+    輸出: 2026 (西元年)
+    """
+    # 1. 解析期間迄的年/月
+    # 假設格式是 115/01/31 或 115.01.31
+    m_end = re.search(r"(\d{2,3})[./-](\d{1,2})", period_end_roc)
+    if not m_end:
+        return 2026 # 備援方案
+    
+    end_roc_y = int(m_end.group(1))
+    end_m = int(m_end.group(2))
+    
+    # 2. 解析明細月
+    try:
+        item_m = int(item_date_md.split('/')[0])
+    except:
+        return end_roc_y + 1911
+
+    # 3. 跨年邏輯：如果明細月份(12) > 期間迄月份(01)，年分要減 1
+    if item_m > end_m and end_m < 6: # 簡單判斷：通常請款不會超過半年
+        target_roc_y = end_roc_y - 1
+    else:
+        target_roc_y = end_roc_y
+        
+    return target_roc_y + 1911
