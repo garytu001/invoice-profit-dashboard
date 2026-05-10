@@ -3,25 +3,22 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "app.db"
 
-
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def _has_column(cur, table_name: str, column_name: str) -> bool:
     cur.execute(f"PRAGMA table_info({table_name});")
     cols = [row[1] for row in cur.fetchall()]
     return column_name in cols
 
-
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    # 1. 建立單頭表格
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS invoices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         print_date TEXT,
@@ -31,15 +28,15 @@ def init_db():
         source_filename TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
-    """
-    )
+    """)
 
-    cur.execute(
-        """
+    # 2. 建立明細表格 (直接把 item_year 放進去)
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS invoice_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         invoice_id INTEGER,
         item_date TEXT,
+        item_year INTEGER,
         order_no TEXT,
         line_type TEXT DEFAULT 'sale',
         product TEXT,
@@ -52,11 +49,10 @@ def init_db():
         amount REAL,
         FOREIGN KEY(invoice_id) REFERENCES invoices(id)
     );
-    """
-    )
+    """)
 
-    cur.execute(
-        """
+    # 3. 建立成本表格
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS cost_table (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product TEXT NOT NULL,
@@ -66,11 +62,10 @@ def init_db():
         cost_unit TEXT DEFAULT '才',
         effective_from TEXT
     );
-    """
-    )
+    """)
 
-    cur.execute(
-        """
+    # 4. 建立覆寫表格
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS item_cost_overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         invoice_item_id INTEGER NOT NULL UNIQUE,
@@ -80,10 +75,14 @@ def init_db():
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(invoice_item_id) REFERENCES invoice_items(id)
     );
-    """
-    )
+    """)
 
-    # 遷移舊資料庫欄位，避免既有 app.db 直接報錯
+    # --- 遷移檢查區 (這是為了相容舊的資料庫檔案) ---
+    
+    # 檢查 item_year 是否存在 (如果有人用的是舊版 app.db)
+    if not _has_column(cur, "invoice_items", "item_year"):
+        cur.execute("ALTER TABLE invoice_items ADD COLUMN item_year INTEGER;")
+
     if not _has_column(cur, "invoice_items", "measure_value"):
         cur.execute("ALTER TABLE invoice_items ADD COLUMN measure_value REAL;")
 
@@ -92,24 +91,9 @@ def init_db():
 
     if not _has_column(cur, "invoice_items", "line_type"):
         cur.execute("ALTER TABLE invoice_items ADD COLUMN line_type TEXT DEFAULT 'sale';")
-        cur.execute(
-            """
-            UPDATE invoice_items
-            SET line_type = CASE
-                WHEN qty < 0 OR amount < 0 THEN 'return'
-                ELSE 'sale'
-            END
-            WHERE line_type IS NULL OR line_type = '';
-            """
-        )
-
-    if _has_column(cur, "cost_table", "unit") and not _has_column(cur, "cost_table", "cost_unit"):
-        cur.execute("ALTER TABLE cost_table ADD COLUMN cost_unit TEXT;")
-        cur.execute("UPDATE cost_table SET cost_unit = COALESCE(unit, '才') WHERE cost_unit IS NULL;")
 
     conn.commit()
     conn.close()
-
 
 if __name__ == "__main__":
     init_db()
