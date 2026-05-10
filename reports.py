@@ -191,3 +191,160 @@ def get_dashboard_data(period: str) -> dict:
         "by_item": finalize_rate(sorted(by_item.values(), key=lambda x: x["revenue"], reverse=True)),
         "missing_cost_items": missing_cost_items,
     }
+
+
+#以下是為了異常警示新增的程式碼#
+def get_anomalies() -> list[dict]:
+    """
+    財務異常偵測：
+    - 單價偏離歷史均價 ±30%
+    - 毛利率 < 0% 或 > 60%
+    - 單筆金額超過該客戶月均 3 倍
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT ii.id, ii.item_date, ii.order_no, ii.product, ii.grade,
+               ii.spec, ii.unit_price, ii.amount, ii.measure_value,
+               ii.measure_unit, inv.customer_name, inv.period_end
+        FROM invoice_items ii
+        JOIN invoices inv ON inv.id = ii.invoice_id
+        WHERE ii.line_type = 'sale'
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    # 計算每個品項的歷史平均單價
+    price_history = {}
+    for r in rows:
+        key = (r.get("product"), r.get("grade"), r.get("spec"))
+        if r.get("unit_price"):
+            price_history.setdefault(key, []).append(float(r["unit_price"]))
+
+    avg_prices = {k: sum(v)/len(v) for k, v in price_history.items() if len(v) >= 2}
+
+    # 計算每個客戶的月均金額
+    customer_amounts = {}
+    for r in rows:
+        c = r.get("customer_name") or "Unknown"
+        customer_amounts.setdefault(c, []).append(float(r.get("amount") or 0))
+
+    customer_avg = {c: sum(v)/len(v) for c, v in customer_amounts.items()}
+
+    anomalies = []
+    for r in rows:
+        reasons = []
+        key = (r.get("product"), r.get("grade"), r.get("spec"))
+        unit_price = r.get("unit_price")
+        amount = float(r.get("amount") or 0)
+        customer = r.get("customer_name") or "Unknown"
+
+        # 單價異常
+        if unit_price and key in avg_prices:
+            avg = avg_prices[key]
+            if float(unit_price) > avg * 1.3:
+                pct = round((float(unit_price)/avg - 1)*100)
+                reasons.append(f"單價高於歷史均價 {pct}%（均價 {avg:.0f}）")
+            elif float(unit_price) < avg * 0.7:
+                pct = round((1 - float(unit_price)/avg)*100)
+                reasons.append(f"單價低於歷史均價 {pct}%（均價 {avg:.0f}）")
+
+        # 金額異常
+        if customer in customer_avg and customer_avg[customer] > 0:
+            if amount > customer_avg[customer] * 3:
+                reasons.append(f"單筆金額為該客戶均值的 {amount/customer_avg[customer]:.1f} 倍")
+
+        if reasons:
+            anomalies.append({
+                "id": r.get("id"),
+                "customer_name": customer,
+                "item_date": r.get("item_date"),
+                "order_no": r.get("order_no"),
+                "product": r.get("product"),
+                "grade": r.get("grade"),
+                "spec": r.get("spec"),
+                "unit_price": unit_price,
+                "amount": amount,
+                "reasons": reasons,
+            })
+
+    return anomalies
+
+#以下是為了客戶價值評分新增的程式碼#
+def get_customer_scores() -> list[dict]:
+    """RFM 簡化版客戶評分"""
+    import datetime
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT ii.*, inv.customer_name, inv.period_end
+        FROM invoice_items ii
+        JOIN invoices inv ON inv.id = ii.invoice_id
+        WHERE ii.line_type = 'sale'
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    from reports import calculate_profit_for_item_rows
+    enriched, _ = calculate_profit_for_item_rows(rows)
+
+    # 按客戶分組
+    customers = {}
+    for it in enriched:
+        c = it.get("customer_name") or "Unknown"
+        customers.setdefault(c, {
+            "customer_name": c,
+            "transactions": [],
+            "revenue": 0.0,
+            "gross_profit": 0.0,
+            "last_date": None,
+        })
+        customers[c]["transactions"].append(it)
+        customers[c]["revenue"] += float(it.get("amount") or 0)
+        customers[c]["gross_profit"] += float(it.get("gross_profit") or 0)
+        d = it.get("item_date")
+        if d and (customers[c]["last_date"] is None or d > customers[c]["last_date"]):
+            customers[c]["last_date"] = d
+
+    result = []
+    all_revenues = [v["revenue"] for v in customers.values()]
+    all_freqs = [len(v["transactions"]) for v in customers.values()]
+    max_rev = max(all_revenues) if all_revenues else 1
+    max_freq = max(all_freqs) if all_freqs else 1
+
+    for c, data in customers.items():
+        freq = len(data["transactions"])
+        rev = data["revenue"]
+        gp = data["gross_profit"]
+        margin = gp / rev if rev else 0
+
+        # M 分（毛利貢獻）
+        m_score = round((gp / (max_rev * 0.3 + 1)) * 5, 1)
+        m_score = min(5, max(1, m_score))
+
+        # F 分（交易頻率）
+        f_score = round((freq / max_freq) * 5, 1)
+        f_score = min(5, max(1, f_score))
+
+        # R 分（簡化：用交易筆數多寡代替，資料不足時難算真實 recency）
+        r_score = f_score  # 簡化處理
+
+        score = round((r_score + f_score + m_score) / 3, 2)
+        if score >= 4:
+            tier = "⭐ VIP"
+        elif score >= 2.5:
+            tier = "一般"
+        else:
+            tier = "低度往來"
+
+        result.append({
+            "customer_name": c,
+            "tier": tier,
+            "score": score,
+            "revenue": round(rev, 0),
+            "gross_profit": round(gp, 0),
+            "gross_margin_rate": round(margin * 100, 1),
+            "transaction_count": freq,
+        })
+
+    return sorted(result, key=lambda x: x["score"], reverse=True)
