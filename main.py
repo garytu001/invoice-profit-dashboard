@@ -26,6 +26,7 @@ from models import ConfirmPayload, CostOverridePayload, ProfitCalcPayload, CostR
 import invoice_service as svc
 from reports import get_dashboard_data
 from exports import export_items_csv as export_items_csv_func, export_summary_csv as export_summary_csv_func
+from reports import calculate_profit_for_item_rows
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -201,94 +202,6 @@ async def import_costs_csv(file: UploadFile = File(...)):
     return svc.import_costs_csv(content)
 
 
-def calculate_profit_for_item_rows(rows: list[dict]) -> tuple[list[dict], dict]:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT invoice_item_id, cost_per_unit, cost_unit FROM item_cost_overrides")
-    override_rows = cur.fetchall()
-    item_override_map = {
-        int(r["invoice_item_id"]): {"cost_per_unit": float(r["cost_per_unit"]), "cost_unit": r["cost_unit"], "source": "item_override"}
-        for r in override_rows
-    }
-
-    items = []
-    revenue_total = 0.0
-    cogs_total = 0.0
-    gp_total = 0.0
-    missing_cost_count = 0
-    unit_mismatch_count = 0
-    calculable_count = 0
-
-    for row in rows:
-        row = dict(row)
-        revenue = float(row.get("amount") or 0)
-        revenue_total += revenue
-        override = item_override_map.get(int(row.get("id")))
-        cost_info = override if override else find_cost_for_item(cur, row, {})
-
-        status = "ok"
-        cogs = None
-        gp = None
-        if not cost_info:
-            status = "cost_missing"
-            missing_cost_count += 1
-        else:
-            measure_unit = (row.get("measure_unit") or "").strip()
-            measure_value = row.get("measure_value")
-            cost_unit = (cost_info.get("cost_unit") or "").strip()
-            cost_per_unit = cost_info.get("cost_per_unit")
-            line_type = (row.get("line_type") or "sale")
-            if measure_value is None:
-                # 無才數/坪數時，將手動成本單價視為「該筆總銷貨成本」
-                cogs = float(cost_per_unit)
-                if line_type == "return" and cogs > 0:
-                    cogs = -cogs
-                gp = revenue - cogs
-                cogs_total += cogs
-                gp_total += gp
-                calculable_count += 1
-                status = "ok_total_cost_mode"
-            elif not measure_unit:
-                status = "measure_missing"
-            elif measure_unit != cost_unit:
-                status = "unit_mismatch"
-                unit_mismatch_count += 1
-            else:
-                signed_measure = float(measure_value)
-                if line_type == "return" and signed_measure > 0:
-                    signed_measure = -signed_measure
-                cogs = signed_measure * float(cost_per_unit)
-                gp = revenue - cogs
-                cogs_total += cogs
-                gp_total += gp
-                calculable_count += 1
-
-        items.append(
-            {
-                **row,
-                "status": status,
-                "cogs": round(cogs, 2) if cogs is not None else None,
-                "gross_profit": round(gp, 2) if gp is not None else None,
-                "cost_per_unit": cost_info.get("cost_per_unit") if cost_info else None,
-                "cost_unit": cost_info.get("cost_unit") if cost_info else None,
-                "cost_source": cost_info.get("source") if cost_info else None,
-            }
-        )
-
-    conn.close()
-    summary = {
-        "line_count": len(items),
-        "calculable_count": calculable_count,
-        "missing_cost_count": missing_cost_count,
-        "unit_mismatch_count": unit_mismatch_count,
-        "revenue_total": round(revenue_total, 2),
-        "cogs_total": round(cogs_total, 2),
-        "gross_profit_total": round(gp_total, 2),
-        "gross_margin_rate": round(gp_total / revenue_total, 6) if revenue_total else None,
-    }
-    return items, summary
-
-
 app.get("/api/reports/dashboard")(get_dashboard_data)
 app.post("/api/reports/item-cost-override")(svc.set_item_cost_override)
 app.get("/api/reports/item-cost-overrides")(svc.list_item_cost_overrides)
@@ -296,5 +209,3 @@ app.delete("/api/reports/item-cost-override/{invoice_item_id}")(svc.delete_item_
 
 app.get("/api/export/items.csv")(export_items_csv_func)
 app.get("/api/export/summary.csv")(export_summary_csv_func)
-
-
