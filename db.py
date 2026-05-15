@@ -76,6 +76,18 @@ def init_db():
         FOREIGN KEY(invoice_item_id) REFERENCES invoice_items(id)
     );
     """)
+    
+    # 新增營業費用表
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS operating_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        year_month TEXT NOT NULL,
+        category TEXT NOT NULL,
+        amount REAL NOT NULL,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+    """)
 
     # --- 遷移檢查區 (這是為了相容舊的資料庫檔案) ---
     
@@ -98,3 +110,4 @@ def init_db():
 if __name__ == "__main__":
     init_db()
     print("DB initialized:", DB_PATH)
+    
