@@ -5,3 +5,5 @@ openai
 python-multipart
 pandas
 plotly
+openpyxl
+xlsxwriter
