@@ -1,4 +1,5 @@
 import re
+import datetime
 from fastapi import HTTPException
 from db import get_conn
 from profit_calculator import find_cost_for_item
@@ -326,8 +327,18 @@ def get_customer_scores() -> list[dict]:
         f_score = round((freq / max_freq) * 5, 1)
         f_score = min(5, max(1, f_score))
 
-        # R 分（簡化：用交易筆數多寡代替，資料不足時難算真實 recency）
-        r_score = f_score  # 簡化處理
+        # R 分，在計算 r_score 的地方改成：
+        last = data.get("last_date")
+        if last:
+            try:
+                last_dt = datetime.date.fromisoformat(last[:10])
+                days_ago = (datetime.date.today() - last_dt).days
+                # 90 天內：5分，每多 90 天掉 1 分，最低 1 分
+                r_score = max(1.0, min(5.0, 5.0 - days_ago // 90))
+            except Exception:
+                r_score = 1.0
+        else:
+            r_score = 1.0
 
         score = round((r_score + f_score + m_score) / 3, 2)
         if score >= 4:
