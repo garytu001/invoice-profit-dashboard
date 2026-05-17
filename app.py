@@ -673,11 +673,23 @@ with tab_export:
 
 #這也是異常警示新增的部分#
 with tab_anomaly:
-    st.markdown("### 🔴 財務異常警示")
+    # Title and buttons side by side
+    title_col, btn_refresh, btn_collapse, btn_expand= st.columns([4, 1, 1, 1])
+    title_col.markdown("### 🔴 財務異常警示")
     st.caption("系統自動偵測單價、金額偏離歷史均值的可疑交易，請人工確認。")
-    
-    if st.button("重新偵測異常", key="btn_anomaly"):
-        st.session_state["anomalies"] = get_anomalies()
+
+    # 初始化展開/收合狀態
+    if 'expand_anomaly' not in st.session_state:
+        st.session_state['expand_anomaly'] = False
+
+    # Buttons next to the title
+    if btn_refresh.button("重新整理", use_container_width=True, key="refresh_anomaly_btn"):
+        st.session_state['anomalies'] = get_anomalies()
+        st.success("✅ 異常資料已重新整理！")
+    if btn_collapse.button("全部收合", use_container_width=True, key="collapse_anomaly_btn"):
+        st.session_state['expand_anomaly'] = False
+    if btn_expand.button("全部展開", use_container_width=True, key="expand_anomaly_btn"):
+        st.session_state['expand_anomaly'] = True
     
     if "anomalies" not in st.session_state:
         st.session_state["anomalies"] = get_anomalies()
