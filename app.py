@@ -52,48 +52,92 @@ tab_review, tab_cost, tab_dash, tab_anomaly, tab_income, tab_export = st.tabs(
 # --- Tab 1: 上傳與人工補正 ---
 with tab_review:
     c1, c2, c3 = st.columns([4, 1, 1])
-    uploaded_file = c1.file_uploader("Upload", type=["jpg", "png", "webp", "jpeg"], label_visibility="collapsed", key="file_u")
-    
+    uploaded_files = c1.file_uploader(
+        "Upload",
+        type=["jpg", "png", "webp", "jpeg"],
+        label_visibility="collapsed",
+        accept_multiple_files=True,
+        key="file_u"
+    )
+
     if c2.button("解析預覽", use_container_width=True, key="btn_p"):
-        if uploaded_file:
-            with st.spinner("GPT 解析中..."):
-                uploaded_file.seek(0)
-                content = uploaded_file.read()
-                compat_f = CompatibilityFile(uploaded_file)
-                m_type = resolve_mime_type(compat_f, content)
-                try:
-                    data = parse_invoice_with_gpt(content, mime_type=m_type)
-                    st.session_state['parsed'] = data
-                    st.session_state['f_name'] = str(uploaded_file.name)
-                except Exception as e:
-                    st.error(f"解析發生錯誤: {e}")
+        if uploaded_files:
+            st.session_state['parsed'] = []
+            st.session_state['f_names'] = []
+            progress = st.progress(0)
+            status_text = st.empty()
+            total = len(uploaded_files)
+
+            # Calculate total size in bytes
+            total_size = sum(len(f.getbuffer()) for f in uploaded_files)
+            processed_size = 0
+
+            for i, uploaded_file in enumerate(uploaded_files, start=1):
+                with st.spinner(f"GPT 解析中：{uploaded_file.name}"):
+                    uploaded_file.seek(0)
+                    content = uploaded_file.read()
+                    compat_f = CompatibilityFile(uploaded_file)
+                    m_type = resolve_mime_type(compat_f, content)
+                    try:
+                        data = parse_invoice_with_gpt(content, mime_type=m_type)
+                        st.session_state['parsed'].append(data)
+                        st.session_state['f_names'].append(uploaded_file.name)
+                    except Exception as e:
+                        st.error(f"解析發生錯誤: {e}")
+
+                processed_size += len(content)
+                percent = int(processed_size / total_size * 100)
+                progress.progress(percent)
+                color = "🟩" if percent > 0.66 else "🟨" if percent > 0.33 else "🟥"
+                status_text.text(f"進度：{percent}%（{i}/{total} 已完成）")
+
+            st.success(f"✅ 已成功解析 {total} 張發票！")
+            status_text.text("解析完成 🎉")
+
 
     if c3.button("確認入庫", use_container_width=True, key="btn_s"):
         if 'parsed' in st.session_state:
             try:
-                # 這裡確保呼叫的是 svc 模組內的 save_invoice_to_db
-                # 如果報錯是在 invoice_service.py 裡面發生，代表那邊也需要修正
-                inv_id = svc.save_invoice_to_db(st.session_state['parsed'], st.session_state['f_name'])
-                st.success(f"✅ 成功入庫！單號 ID: {inv_id}")
+                for f_name, data in zip(st.session_state['f_names'], st.session_state['parsed']):
+                    inv_id = svc.save_invoice_to_db(data, f_name)
+                    st.success(f"✅ 成功入庫！{f_name} → 單號 ID: {inv_id}")
                 del st.session_state['parsed']
-            except NameError as ne:
-                st.error(f"程式邏輯錯誤: {ne}。請檢查 invoice_service.py 內部的函數呼叫。")
             except Exception as e:
                 st.error(f"入庫失敗: {e}")
 
     if 'parsed' in st.session_state:
-        p = st.session_state['parsed']
-        st.markdown("### 單頭資訊")
-        g1, g2, g3, g4 = st.columns(4)
-        p['print_date'] = g1.text_input("印表日期", p.get('print_date', ''))
-        p['period_start'] = g2.text_input("請款起", p.get('period_start', ''))
-        p['period_end'] = g3.text_input("請款迄", p.get('period_end', ''))
-        p['customer_name'] = g4.text_input("客戶名稱", p.get('customer_name', ''))
+        # Title and buttons side by side
+        title_col, btn_collapse, btn_expand= st.columns([4, 1, 1])
+        title_col.markdown("## 📦 已解析發票列表")
 
-        st.markdown("### 明細紀錄")
-        df_items = pd.DataFrame(p.get('items', []))
-        edited_df = st.data_editor(df_items, num_rows="dynamic", use_container_width=True, key="item_editor")
-        st.session_state['parsed']['items'] = edited_df.to_dict('records')
+        # Initialize toggle state once
+        if 'expand_all' not in st.session_state:
+            st.session_state['expand_all'] = False
+
+        # One button to toggle expand/collapse
+        if btn_collapse.button("全部收合", use_container_width=True, key="collapse_btn"):
+            st.session_state['expand_all'] = False
+        if btn_expand.button("全部展開", use_container_width=True, key="expand_btn"):
+            st.session_state['expand_all'] = True
+
+        # Render each invoice with expander
+        for idx, (f_name, p) in enumerate(zip(st.session_state['f_names'], st.session_state['parsed'])):
+            with st.expander(f"📄 {f_name}", expanded=st.session_state['expand_all']):
+                g1, g2, g3, g4 = st.columns(4)
+                p['print_date'] = g1.text_input("印表日期", p.get('print_date', ''), key=f"print_date_{idx}")
+                p['period_start'] = g2.text_input("請款起", p.get('period_start', ''), key=f"period_start_{idx}")
+                p['period_end'] = g3.text_input("請款迄", p.get('period_end', ''), key=f"period_end_{idx}")
+                p['customer_name'] = g4.text_input("客戶名稱", p.get('customer_name', ''), key=f"customer_name_{idx}")
+
+                st.markdown("### 明細紀錄")
+                df_items = pd.DataFrame(p.get('items', []))
+                edited_df = st.data_editor(
+                    df_items,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"item_editor_{idx}"
+                )
+                p['items'] = edited_df.to_dict('records')
 
 # --- Tab 2: 成本表管理 ---
 with tab_cost:
